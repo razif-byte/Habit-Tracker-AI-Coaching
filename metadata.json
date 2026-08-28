@@ -1,0 +1,6 @@
+{
+  "name": "Habit Coach",
+  "description": "Habit Tracker with AI Coaching, streak analytics, smart reminders, gamification, and personalized mentorship.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
