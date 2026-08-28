@@ -36,19 +36,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.BehaviorTrendReportCard
 import com.example.ui.components.CategoryDistributionCard
+import com.example.ui.components.MissedHabitsPatternCard
 import com.example.ui.components.MonthlyHeatmapGrid
+import com.example.ui.components.MoodCorrelationCard
 import com.example.ui.components.WatermarkBar
 import com.example.ui.components.WeeklyCompletionChart
 import com.example.ui.theme.Amber500
-import com.example.ui.theme.GeoVioletPrimary
 import com.example.ui.viewmodel.HabitViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,6 +60,7 @@ fun AnalyticsScreen(
 ) {
     val habits by viewModel.allHabits.collectAsStateWithLifecycle()
     val allLogs by viewModel.allLogs.collectAsStateWithLifecycle()
+    val allMoodLogs by viewModel.allMoodLogs.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
 
     val totalLogs = allLogs.count { it.isCompleted }
@@ -74,7 +76,7 @@ fun AnalyticsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Progress & Analytics",
+                        text = "Advanced Analytics",
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -101,7 +103,7 @@ fun AnalyticsScreen(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
@@ -109,7 +111,7 @@ fun AnalyticsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(20.dp),
+                            .padding(18.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -134,7 +136,7 @@ fun AnalyticsScreen(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Based on completion rate across all active habit schedules.",
+                                text = "High habit adherence locks in automated neurological habit loops.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -145,7 +147,7 @@ fun AnalyticsScreen(
                         Box(contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(
                                 progress = { consistencyRate / 100f },
-                                modifier = Modifier.size(72.dp),
+                                modifier = Modifier.size(68.dp),
                                 color = MaterialTheme.colorScheme.primary,
                                 strokeWidth = 7.dp,
                                 trackColor = MaterialTheme.colorScheme.outlineVariant
@@ -165,7 +167,7 @@ fun AnalyticsScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     StatTile(
@@ -197,6 +199,31 @@ fun AnalyticsScreen(
                         modifier = Modifier.weight(1f)
                     )
                 }
+            }
+
+            // 1. Feature: Mood vs. Habit Completion Correlation Module
+            item {
+                MoodCorrelationCard(
+                    moodLogs = allMoodLogs,
+                    habitLogs = allLogs,
+                    habits = habits
+                )
+            }
+
+            // 2. Feature: Drop-off & Missed Habit Pattern Diagnostic
+            item {
+                MissedHabitsPatternCard(
+                    allLogs = allLogs,
+                    habits = habits
+                )
+            }
+
+            // 3. Feature: Personalized Trend & Longitudinal Report
+            item {
+                BehaviorTrendReportCard(
+                    habits = habits,
+                    totalCompleted = userProfile?.totalHabitsCompleted ?: totalLogs
+                )
             }
 
             // Weekly Completion Bar Chart

@@ -1,10 +1,14 @@
 package com.example.data.repository
 
 import com.example.data.local.AppDatabase
+import com.example.data.local.entity.AccountabilityGroupEntity
 import com.example.data.local.entity.BadgeEntity
 import com.example.data.local.entity.ChatMessageEntity
+import com.example.data.local.entity.GroupMemberEntity
+import com.example.data.local.entity.GroupMessageEntity
 import com.example.data.local.entity.HabitEntity
 import com.example.data.local.entity.HabitLogEntity
+import com.example.data.local.entity.MoodLogEntity
 import com.example.data.local.entity.UserProfileEntity
 import kotlinx.coroutines.flow.Flow
 import java.text.SimpleDateFormat
@@ -19,24 +23,35 @@ class HabitRepository(private val database: AppDatabase) {
     private val badgeDao = database.badgeDao()
     private val userProfileDao = database.userProfileDao()
     private val chatDao = database.chatDao()
+    private val moodLogDao = database.moodLogDao()
+    private val accountabilityDao = database.accountabilityDao()
 
     val allActiveHabits: Flow<List<HabitEntity>> = habitDao.getAllActiveHabits()
     val allBadges: Flow<List<BadgeEntity>> = badgeDao.getAllBadges()
     val userProfile: Flow<UserProfileEntity?> = userProfileDao.getUserProfile()
     val chatMessages: Flow<List<ChatMessageEntity>> = chatDao.getAllMessages()
     val allLogs: Flow<List<HabitLogEntity>> = habitLogDao.getAllLogs()
+    val allMoodLogs: Flow<List<MoodLogEntity>> = moodLogDao.getAllMoodLogs()
+    val allGroups: Flow<List<AccountabilityGroupEntity>> = accountabilityDao.getAllGroups()
+
+    fun getTodayMood(todayDateString: String): Flow<MoodLogEntity?> {
+        return moodLogDao.getMoodForDate(todayDateString)
+    }
 
     fun getLogsForDate(dateString: String): Flow<List<HabitLogEntity>> {
         return habitLogDao.getLogsForDate(dateString)
     }
 
-    fun getLogsSinceDate(startDateString: String): Flow<List<HabitLogEntity>> {
-        return habitLogDao.getLogsSinceDate(startDateString)
+    fun getGroupMembers(groupId: Long): Flow<List<GroupMemberEntity>> {
+        return accountabilityDao.getMembersForGroup(groupId)
+    }
+
+    fun getGroupMessages(groupId: Long): Flow<List<GroupMessageEntity>> {
+        return accountabilityDao.getMessagesForGroup(groupId)
     }
 
     suspend fun insertHabit(habit: HabitEntity): Long {
         val id = habitDao.insertHabit(habit)
-        // Check if first habit badge should be unlocked
         badgeDao.unlockBadge("first_habit")
         return id
     }
@@ -93,10 +108,9 @@ class HabitRepository(private val database: AppDatabase) {
         val calendar = Calendar.getInstance()
 
         var currentStreak = 0
-        var checkDate = Date()
-        calendar.time = checkDate
+        calendar.time = Date()
 
-        // Check if completed today
+        // Check today
         val todayStr = dateFormat.format(calendar.time)
         val todayLog = habitLogDao.getLog(habitId, todayStr)
 
@@ -135,16 +149,44 @@ class HabitRepository(private val database: AppDatabase) {
         habitDao.updateStreakStats(habitId, currentStreak, bestStreak, totalCompletions)
     }
 
+    suspend fun logMood(
+        dateString: String,
+        moodScore: Int,
+        moodLabel: String,
+        moodEmoji: String,
+        energyLevel: Int,
+        stressLevel: Int,
+        tags: String,
+        notes: String
+    ) {
+        val entity = MoodLogEntity(
+            dateString = dateString,
+            moodScore = moodScore,
+            moodLabel = moodLabel,
+            moodEmoji = moodEmoji,
+            energyLevel = energyLevel,
+            stressLevel = stressLevel,
+            tags = tags,
+            notes = notes,
+            timestamp = System.currentTimeMillis()
+        )
+        moodLogDao.insertOrUpdateMood(entity)
+        // Award XP for mood check-in (+30 XP)
+        userProfileDao.addXpAndCompletion(30)
+        badgeDao.unlockBadge("mood_master")
+    }
+
     suspend fun checkAndUnlockBadges() {
         val totalLogs = habitLogDao.getTotalCompletedLogsCount()
-        val habits = database.habitDao().getHabitById(1L) // quick check
         val profile = userProfileDao.getUserProfileOnce()
 
         // Streak badges
         if (totalLogs >= 1) badgeDao.unlockBadge("first_habit")
         if (totalLogs >= 3) badgeDao.unlockBadge("streak_3")
         if (totalLogs >= 7) badgeDao.unlockBadge("streak_7")
+        if (totalLogs >= 14) badgeDao.unlockBadge("streak_14")
         if (totalLogs >= 21) badgeDao.unlockBadge("streak_21")
+        if (totalLogs >= 30) badgeDao.unlockBadge("streak_30")
         if (totalLogs >= 100) badgeDao.unlockBadge("century_club")
 
         // Level update based on XP
@@ -166,8 +208,75 @@ class HabitRepository(private val database: AppDatabase) {
         )
     }
 
-    suspend fun clearChat() {
-        chatDao.clearChatHistory()
+    suspend fun sendGroupMessage(
+        groupId: Long,
+        senderName: String,
+        senderAvatar: String,
+        message: String,
+        messageType: String = "chat",
+        isCurrentUser: Boolean = true
+    ): Long {
+        if (isCurrentUser) {
+            userProfileDao.addXpAndCompletion(10) // +10 XP for community participation
+            badgeDao.unlockBadge("squad_leader")
+        }
+        return accountabilityDao.insertMessage(
+            GroupMessageEntity(
+                groupId = groupId,
+                senderName = senderName,
+                senderAvatar = senderAvatar,
+                isCurrentUser = isCurrentUser,
+                message = message,
+                messageType = messageType,
+                timestamp = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun joinGroupByCode(inviteCode: String): Boolean {
+        // Simple logic for joining groups
+        val groups = listOf(
+            AccountabilityGroupEntity(
+                name = "Squad ($inviteCode)",
+                description = "Accountability team for consistency & habit mastery.",
+                inviteCode = inviteCode.uppercase(),
+                category = "General",
+                memberCount = 4,
+                targetDailyCompletions = 12,
+                isUserJoined = true
+            )
+        )
+        accountabilityDao.insertGroups(groups)
+        badgeDao.unlockBadge("squad_leader")
+        return true
+    }
+
+    suspend fun createGroup(name: String, description: String, category: String, inviteCode: String): Long {
+        val group = AccountabilityGroupEntity(
+            name = name,
+            description = description,
+            category = category,
+            inviteCode = inviteCode.uppercase(),
+            memberCount = 1,
+            targetDailyCompletions = 5,
+            isUserJoined = true
+        )
+        val id = accountabilityDao.insertGroup(group)
+        val user = userProfileDao.getUserProfileOnce()
+        val member = GroupMemberEntity(
+            groupId = id,
+            userName = "${user?.name ?: "Alex"} (Owner)",
+            avatarInitials = (user?.name ?: "Alex").take(2).uppercase(),
+            isCurrentUser = true,
+            statusEmoji = "👑",
+            statusText = "Created group",
+            currentStreak = user?.longestOverallStreak ?: 5,
+            habitsCompletedToday = 2,
+            habitsTargetToday = 3
+        )
+        accountabilityDao.insertMember(member)
+        badgeDao.unlockBadge("squad_leader")
+        return id
     }
 
     suspend fun updateSubscription(isPremium: Boolean, plan: String, expiry: Long?) {
@@ -175,7 +284,7 @@ class HabitRepository(private val database: AppDatabase) {
     }
 
     suspend fun updateProfile(profile: UserProfileEntity) {
-        userProfileDao.updateProfile(profile)
+        userProfileDao.insertOrUpdateProfile(profile)
     }
 
     suspend fun setDarkMode(isDark: Boolean) {

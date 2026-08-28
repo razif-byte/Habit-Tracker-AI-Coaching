@@ -4,23 +4,28 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
+import com.example.data.local.entity.AccountabilityGroupEntity
 import com.example.data.local.entity.BadgeEntity
 import com.example.data.local.entity.ChatMessageEntity
+import com.example.data.local.entity.GroupMemberEntity
+import com.example.data.local.entity.GroupMessageEntity
 import com.example.data.local.entity.HabitEntity
 import com.example.data.local.entity.HabitLogEntity
+import com.example.data.local.entity.MoodLogEntity
 import com.example.data.local.entity.UserProfileEntity
 import com.example.data.remote.AICoachingRepository
 import com.example.data.repository.HabitRepository
 import com.example.notification.HabitNotificationManager
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -31,6 +36,19 @@ data class MilestoneCelebrationData(
     val badgeTitle: String? = null
 )
 
+data class LeaderboardUser(
+    val rank: Int,
+    val name: String,
+    val initials: String,
+    val avatarColorHex: String,
+    val weeklyXp: Int,
+    val currentStreak: Int,
+    val isCurrentUser: Boolean,
+    val league: String = "Gold", // Diamond, Platinum, Gold, Silver, Bronze
+    val change: String = "+1"
+)
+
+@OptIn(ExperimentalCoroutinesApi::class)
 class HabitViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AppDatabase.getDatabase(application, viewModelScope)
@@ -54,6 +72,27 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allLogs: StateFlow<List<HabitLogEntity>> = repository.allLogs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allMoodLogs: StateFlow<List<MoodLogEntity>> = repository.allMoodLogs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val todayMood: StateFlow<MoodLogEntity?> = repository.getTodayMood(todayDateString)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    // Social Accountability Groups
+    val allGroups: StateFlow<List<AccountabilityGroupEntity>> = repository.allGroups
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _selectedGroupId = MutableStateFlow<Long>(1L)
+    val selectedGroupId: StateFlow<Long> = _selectedGroupId.asStateFlow()
+
+    val currentGroupMembers: StateFlow<List<GroupMemberEntity>> = _selectedGroupId
+        .flatMapLatest { groupId -> repository.getGroupMembers(groupId) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val currentGroupMessages: StateFlow<List<GroupMessageEntity>> = _selectedGroupId
+        .flatMapLatest { groupId -> repository.getGroupMessages(groupId) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _selectedCategory = MutableStateFlow("All")
@@ -84,6 +123,10 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         _selectedCategory.value = category
     }
 
+    fun setSelectedGroup(groupId: Long) {
+        _selectedGroupId.value = groupId
+    }
+
     fun clearSnackbar() {
         _snackbarMessage.value = null
     }
@@ -105,7 +148,14 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                         title = habit.title,
                         streakDays = newStreak,
                         xpEarned = 100,
-                        badgeTitle = if (newStreak == 7) "7-Day Champion" else if (newStreak == 21) "21-Day Habit Transformer" else "Momentum Booster"
+                        badgeTitle = when (newStreak) {
+                            3 -> "3-Day Momentum"
+                            7 -> "7-Day Champion"
+                            14 -> "Fortnight Master"
+                            21 -> "21-Day Habit Transformer"
+                            30 -> "30-Day Legend"
+                            else -> "Momentum Booster"
+                        }
                     )
                     _activeMilestone.value = celebration
                     notificationManager.sendMilestoneCelebration(habit.title, newStreak, 100)
@@ -147,7 +197,7 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                 colorHex = colorHex
             )
             repository.insertHabit(newHabit)
-            _snackbarMessage.value = "Habit '${title.trim()}' created! 🚀"
+            _snackbarMessage.value = "Habit '${title.trim()}' created! 🚀 (+50 XP)"
         }
     }
 
@@ -165,13 +215,91 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Mood Tracking & Correlation
+    fun logDailyMood(
+        moodScore: Int,
+        moodLabel: String,
+        moodEmoji: String,
+        energyLevel: Int,
+        stressLevel: Int,
+        tags: String,
+        notes: String
+    ) {
+        viewModelScope.launch {
+            repository.logMood(
+                dateString = todayDateString,
+                moodScore = moodScore,
+                moodLabel = moodLabel,
+                moodEmoji = moodEmoji,
+                energyLevel = energyLevel,
+                stressLevel = stressLevel,
+                tags = tags,
+                notes = notes
+            )
+            _snackbarMessage.value = "Mood logged: $moodEmoji $moodLabel (+30 XP) ✨"
+        }
+    }
+
+    // Social Accountability Actions
+    fun sendGroupChatMessage(messageText: String) {
+        val trimmed = messageText.trim()
+        if (trimmed.isBlank()) return
+        val currentGroup = _selectedGroupId.value
+        val user = userProfile.value
+        viewModelScope.launch {
+            repository.sendGroupMessage(
+                groupId = currentGroup,
+                senderName = user?.name ?: "Alex Rivera",
+                senderAvatar = (user?.name ?: "Alex").take(2).uppercase(),
+                message = trimmed,
+                messageType = "chat",
+                isCurrentUser = true
+            )
+            _snackbarMessage.value = "Message sent to squad! (+10 XP)"
+        }
+    }
+
+    fun sendCheerToPeer(memberName: String, cheerEmoji: String, cheerPhrase: String) {
+        val currentGroup = _selectedGroupId.value
+        val user = userProfile.value
+        viewModelScope.launch {
+            val messageText = "${user?.name ?: "Alex"} sent a cheer to $memberName: $cheerPhrase $cheerEmoji"
+            repository.sendGroupMessage(
+                groupId = currentGroup,
+                senderName = user?.name ?: "Alex Rivera",
+                senderAvatar = (user?.name ?: "Alex").take(2).uppercase(),
+                message = messageText,
+                messageType = "cheer",
+                isCurrentUser = true
+            )
+            _snackbarMessage.value = "Cheer sent to $memberName! $cheerEmoji"
+        }
+    }
+
+    fun joinAccountabilityGroup(code: String) {
+        val trimmed = code.trim().uppercase()
+        if (trimmed.isBlank()) return
+        viewModelScope.launch {
+            repository.joinGroupByCode(trimmed)
+            _snackbarMessage.value = "Joined squad with code $trimmed! 🤝"
+        }
+    }
+
+    fun createAccountabilityGroup(name: String, description: String, category: String, code: String) {
+        if (name.isBlank() || code.isBlank()) return
+        viewModelScope.launch {
+            val id = repository.createGroup(name, description, category, code)
+            _selectedGroupId.value = id
+            _snackbarMessage.value = "Created squad '$name'! 🎉"
+        }
+    }
+
     fun sendChatMessage(text: String) {
         val trimmed = text.trim()
         if (trimmed.isBlank() || _isGeneratingAI.value) return
 
         viewModelScope.launch {
             _isGeneratingAI.value = true
-            // Save user message to database
             repository.sendChatMessage(trimmed, sender = "user")
 
             val active = allHabits.value
@@ -185,7 +313,6 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                 userGoal = profile?.primaryGoal ?: "Consistency"
             )
 
-            // Save AI reply to database
             repository.sendChatMessage(reply, sender = "coach")
             _isGeneratingAI.value = false
         }

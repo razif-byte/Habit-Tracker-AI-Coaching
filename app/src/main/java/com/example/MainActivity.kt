@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material3.Icon
@@ -44,16 +45,16 @@ import com.example.ui.screens.AnalyticsScreen
 import com.example.ui.screens.GamificationScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ProfileScreen
-import com.example.ui.theme.GeoVioletPrimary
+import com.example.ui.screens.SocialScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.HabitViewModel
 
 enum class Screen(val route: String, val title: String, val icon: ImageVector) {
     HOME("home", "Habits", Icons.Default.CheckCircle),
     ANALYTICS("analytics", "Analytics", Icons.Default.Assessment),
-    COACH("coach", "AI Coach", Icons.Default.Psychology),
-    GAMIFICATION("gamification", "Badges", Icons.Default.EmojiEvents),
-    PROFILE("profile", "Profile", Icons.Default.Person)
+    SOCIAL("social", "Squads", Icons.Default.Groups),
+    GAMIFICATION("gamification", "Ranks", Icons.Default.EmojiEvents),
+    COACH("coach", "AI Coach", Icons.Default.Psychology)
 }
 
 class MainActivity : ComponentActivity() {
@@ -116,13 +117,14 @@ fun MainAppScreen(viewModel: HabitViewModel) {
                             Icon(
                                 imageVector = screen.icon,
                                 contentDescription = screen.title,
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         },
                         label = {
                             Text(
                                 text = screen.title,
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
+                                maxLines = 1,
                                 color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         },
@@ -158,13 +160,16 @@ fun MainAppScreen(viewModel: HabitViewModel) {
             composable(Screen.ANALYTICS.route) {
                 AnalyticsScreen(viewModel = viewModel)
             }
-            composable(Screen.COACH.route) {
-                AICoachScreen(viewModel = viewModel)
+            composable(Screen.SOCIAL.route) {
+                SocialScreen(viewModel = viewModel)
             }
             composable(Screen.GAMIFICATION.route) {
                 GamificationScreen(viewModel = viewModel)
             }
-            composable(Screen.PROFILE.route) {
+            composable(Screen.COACH.route) {
+                AICoachScreen(viewModel = viewModel)
+            }
+            composable("profile") {
                 ProfileScreen(viewModel = viewModel)
             }
         }
