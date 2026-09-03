@@ -11,6 +11,7 @@ import com.example.data.local.dao.ChatDao
 import com.example.data.local.dao.HabitDao
 import com.example.data.local.dao.HabitLogDao
 import com.example.data.local.dao.MoodLogDao
+import com.example.data.local.dao.TrendingLinkDao
 import com.example.data.local.dao.UserProfileDao
 import com.example.data.local.entity.AccountabilityGroupEntity
 import com.example.data.local.entity.BadgeEntity
@@ -20,7 +21,9 @@ import com.example.data.local.entity.GroupMessageEntity
 import com.example.data.local.entity.HabitEntity
 import com.example.data.local.entity.HabitLogEntity
 import com.example.data.local.entity.MoodLogEntity
+import com.example.data.local.entity.TrendingLinkEntity
 import com.example.data.local.entity.UserProfileEntity
+import com.example.data.repository.TrendingRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -39,9 +42,10 @@ import java.util.Locale
         MoodLogEntity::class,
         AccountabilityGroupEntity::class,
         GroupMemberEntity::class,
-        GroupMessageEntity::class
+        GroupMessageEntity::class,
+        TrendingLinkEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -53,6 +57,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun userProfileDao(): UserProfileDao
     abstract fun moodLogDao(): MoodLogDao
     abstract fun accountabilityDao(): AccountabilityDao
+    abstract fun trendingLinkDao(): TrendingLinkDao
 
     companion object {
         @Volatile
@@ -402,6 +407,10 @@ abstract class AppDatabase : RoomDatabase() {
                     suggestionType = "daily_motivate"
                 )
             )
+
+            // 10. Curated Trending Apps & Malay Karaoke Links
+            val trendingLinkDao = database.trendingLinkDao()
+            trendingLinkDao.insertAll(TrendingRepository.getCuratedTrendingLinks())
         }
 
         private fun getDateOffset(format: SimpleDateFormat, offsetDays: Int): String {

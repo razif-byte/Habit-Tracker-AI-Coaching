@@ -12,10 +12,16 @@ import com.example.data.local.entity.GroupMessageEntity
 import com.example.data.local.entity.HabitEntity
 import com.example.data.local.entity.HabitLogEntity
 import com.example.data.local.entity.MoodLogEntity
+import com.example.data.local.entity.TrendingLinkEntity
 import com.example.data.local.entity.UserProfileEntity
 import com.example.data.remote.AICoachingRepository
 import com.example.data.repository.HabitRepository
+import com.example.data.repository.TrendingRepository
 import com.example.notification.HabitNotificationManager
+import com.example.service.OverlayBubbleService
+import com.example.util.AppActivityTracker
+import com.example.util.AppIntegrationHelper
+import com.example.util.DailyActivitySummary
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -53,6 +59,7 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AppDatabase.getDatabase(application, viewModelScope)
     private val repository = HabitRepository(database)
+    private val trendingRepository = TrendingRepository(database.trendingLinkDao())
     private val aiRepository = AICoachingRepository()
     private val notificationManager = HabitNotificationManager(application)
 
@@ -64,6 +71,47 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
 
     val userProfile: StateFlow<UserProfileEntity?> = repository.userProfile
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    // Trending Links & Apps State
+    val allTrendingLinks: StateFlow<List<TrendingLinkEntity>> = trendingRepository.allLinks
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _selectedTrendingCategory = MutableStateFlow("ALL")
+    val selectedTrendingCategory: StateFlow<String> = _selectedTrendingCategory.asStateFlow()
+
+    private val _trendingSearchQuery = MutableStateFlow("")
+    val trendingSearchQuery: StateFlow<String> = _trendingSearchQuery.asStateFlow()
+
+    private val _isFeedRefreshing = MutableStateFlow(false)
+    val isFeedRefreshing: StateFlow<Boolean> = _isFeedRefreshing.asStateFlow()
+
+    private val _lastFeedSyncTime = MutableStateFlow(System.currentTimeMillis())
+    val lastFeedSyncTime: StateFlow<Long> = _lastFeedSyncTime.asStateFlow()
+
+    private val _feedSyncStatus = MutableStateFlow<String?>(null)
+    val feedSyncStatus: StateFlow<String?> = _feedSyncStatus.asStateFlow()
+
+    val filteredTrendingLinks: StateFlow<List<TrendingLinkEntity>> = combine(
+        allTrendingLinks,
+        _selectedTrendingCategory,
+        _trendingSearchQuery
+    ) { links, cat, query ->
+        links.filter { item ->
+            val matchCategory = if (cat == "ALL") true else item.category.equals(cat, ignoreCase = true)
+            val matchQuery = if (query.isBlank()) true else {
+                item.title.contains(query, ignoreCase = true) ||
+                item.subtitle.contains(query, ignoreCase = true)
+            }
+            matchCategory && matchQuery
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // App Activity & System Overlay State
+    private val _dailyActivitySummary = MutableStateFlow<DailyActivitySummary?>(null)
+    val dailyActivitySummary: StateFlow<DailyActivitySummary?> = _dailyActivitySummary.asStateFlow()
+
+    private val _isOverlayActive = MutableStateFlow(OverlayBubbleService.isRunning)
+    val isOverlayActive: StateFlow<Boolean> = _isOverlayActive.asStateFlow()
 
     val badges: StateFlow<List<BadgeEntity>> = repository.allBadges
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -112,6 +160,13 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            trendingRepository.checkAndSeedInitialTrendingLinks()
+        }
+        refreshAppActivityUsage()
+    }
 
     // Map of today's completed habit logs: habitId -> HabitLogEntity
     val todayLogsMap: StateFlow<Map<Long, HabitLogEntity>> = repository.getLogsForDate(todayDateString)
@@ -385,5 +440,111 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
             val current = userProfile.value ?: return@launch
             repository.setDarkMode(!current.isDarkMode)
         }
+    }
+
+    // --- Trending Links & Apps Functions ---
+    fun setTrendingCategory(category: String) {
+        _selectedTrendingCategory.value = category
+    }
+
+    fun setTrendingSearchQuery(query: String) {
+        _trendingSearchQuery.value = query
+    }
+
+    fun refreshTrendingFeeds(category: String? = null) {
+        if (_isFeedRefreshing.value) return
+        viewModelScope.launch {
+            _isFeedRefreshing.value = true
+            _feedSyncStatus.value = "Memuat turun suapan RSS & API..."
+            try {
+                val targetCat = category ?: _selectedTrendingCategory.value
+                val result = trendingRepository.fetchAndSyncFeeds(targetCat)
+                _lastFeedSyncTime.value = result.timestamp
+                _feedSyncStatus.value = result.message
+                _snackbarMessage.value = result.message
+            } catch (e: Exception) {
+                _feedSyncStatus.value = "Gagal memuat turun: ${e.message}"
+            } finally {
+                _isFeedRefreshing.value = false
+            }
+        }
+    }
+
+    fun addTrendingLink(
+        title: String,
+        subtitle: String,
+        url: String,
+        category: String,
+        platform: String,
+        packageName: String = ""
+    ) {
+        if (title.isBlank() || url.isBlank()) {
+            _snackbarMessage.value = "Sila masukkan tajuk dan pautan URL"
+            return
+        }
+        viewModelScope.launch {
+            val newLink = TrendingLinkEntity(
+                title = title.trim(),
+                subtitle = subtitle.trim(),
+                url = url.trim(),
+                category = category,
+                platform = platform,
+                packageName = packageName.trim(),
+                isCustom = true
+            )
+            trendingRepository.insertLink(newLink)
+            _snackbarMessage.value = "Pautan '$title' berjaya ditambah!"
+        }
+    }
+
+    fun toggleFavoriteTrending(id: Long, isFavorite: Boolean) {
+        viewModelScope.launch {
+            trendingRepository.updateFavorite(id, isFavorite)
+        }
+    }
+
+    fun recordTrendingClick(id: Long) {
+        viewModelScope.launch {
+            trendingRepository.recordClick(id)
+        }
+    }
+
+    fun deleteTrendingLink(link: TrendingLinkEntity) {
+        viewModelScope.launch {
+            trendingRepository.deleteLink(link)
+            _snackbarMessage.value = "Pautan dipadam"
+        }
+    }
+
+    fun createHabitFromTrending(title: String, category: String, iconName: String) {
+        viewModelScope.launch {
+            val habit = HabitEntity(
+                title = title,
+                description = "Tabiat berasaskan inspirasi trending",
+                category = category,
+                targetCount = 1,
+                unit = "kali",
+                reminderTime = "20:00",
+                iconName = iconName,
+                colorHex = "#6750A4"
+            )
+            repository.insertHabit(habit)
+            _snackbarMessage.value = "Tabiat '$title' berjaya ditambah ke senarai harian!"
+        }
+    }
+
+    // --- App Activity Monitoring & System Overlay ---
+    fun refreshAppActivityUsage() {
+        viewModelScope.launch {
+            val summary = AppActivityTracker.getTodayAppUsage(getApplication())
+            _dailyActivitySummary.value = summary
+            _isOverlayActive.value = OverlayBubbleService.isRunning
+        }
+    }
+
+    fun toggleOverlayService(enable: Boolean) {
+        AppIntegrationHelper.toggleOverlayService(getApplication(), enable)
+        _isOverlayActive.value = enable
+        _snackbarMessage.value = if (enable) "Floating Overlay diaktifkan!" else "Floating Overlay ditutup"
     }
 }
