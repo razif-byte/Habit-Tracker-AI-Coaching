@@ -1,6 +1,6 @@
 {
   "name": "Habit Coach",
-  "description": "Habit Tracker with AI Coaching, streak analytics, smart reminders, gamification, and personalized mentorship.",
+  "description": "Habit Tracker with Gemini 3.5, ChatGPT-4o & Gemini Live real-time audio voice coaching, streak analytics, and personalized mentorship.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

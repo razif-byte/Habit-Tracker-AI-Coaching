@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
@@ -15,13 +16,17 @@ import com.example.data.local.entity.MoodLogEntity
 import com.example.data.local.entity.TrendingLinkEntity
 import com.example.data.local.entity.UserProfileEntity
 import com.example.data.remote.AICoachingRepository
+import com.example.data.remote.AIEngineType
 import com.example.data.repository.HabitRepository
 import com.example.data.repository.TrendingRepository
 import com.example.notification.HabitNotificationManager
 import com.example.service.OverlayBubbleService
 import com.example.util.AppActivityTracker
 import com.example.util.AppIntegrationHelper
+import com.example.util.CoachPersona
 import com.example.util.DailyActivitySummary
+import com.example.util.GeminiLiveVoiceManager
+import com.example.util.LiveVoiceState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -161,11 +166,41 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
+    // --- AI Engine & Gemini Live Voice Integration ---
+    private val sharedPrefs = application.getSharedPreferences("ai_coach_prefs", Context.MODE_PRIVATE)
+
+    private val _selectedAIEngine = MutableStateFlow(
+        AIEngineType.fromId(sharedPrefs.getString("selected_engine", AIEngineType.GEMINI_FLASH.id))
+    )
+    val selectedAIEngine: StateFlow<AIEngineType> = _selectedAIEngine.asStateFlow()
+
+    private val _customOpenAiKey = MutableStateFlow(sharedPrefs.getString("openai_key", "") ?: "")
+    val customOpenAiKey: StateFlow<String> = _customOpenAiKey.asStateFlow()
+
+    private val _customGeminiKey = MutableStateFlow(sharedPrefs.getString("gemini_key", "") ?: "")
+    val customGeminiKey: StateFlow<String> = _customGeminiKey.asStateFlow()
+
+    val liveVoiceManager = GeminiLiveVoiceManager(application)
+    val liveVoiceState: StateFlow<LiveVoiceState> = liveVoiceManager.voiceState
+    val liveAudioRms: StateFlow<Float> = liveVoiceManager.audioRmsLevel
+    val liveInterimTranscript: StateFlow<String> = liveVoiceManager.interimTranscript
+    val selectedPersona: StateFlow<CoachPersona> = liveVoiceManager.selectedPersona
+
+    private val _isLiveSessionOpen = MutableStateFlow(false)
+    val isLiveSessionOpen: StateFlow<Boolean> = _isLiveSessionOpen.asStateFlow()
+
     init {
         viewModelScope.launch {
             trendingRepository.checkAndSeedInitialTrendingLinks()
         }
         refreshAppActivityUsage()
+
+        liveVoiceManager.onSpeechRecognized = { spokenText ->
+            sendChatMessage(spokenText, engineOverride = AIEngineType.GEMINI_LIVE)
+        }
+        liveVoiceManager.onSpeechError = { errorMsg ->
+            _snackbarMessage.value = errorMsg
+        }
     }
 
     // Map of today's completed habit logs: habitId -> HabitLogEntity
@@ -349,13 +384,63 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendChatMessage(text: String) {
+    fun setAIEngine(engine: AIEngineType) {
+        _selectedAIEngine.value = engine
+        sharedPrefs.edit().putString("selected_engine", engine.id).apply()
+        _snackbarMessage.value = "Enjin AI ditukar kepada ${engine.displayName}"
+    }
+
+    fun saveApiKeys(openAiKey: String, geminiKey: String) {
+        _customOpenAiKey.value = openAiKey.trim()
+        _customGeminiKey.value = geminiKey.trim()
+        sharedPrefs.edit()
+            .putString("openai_key", openAiKey.trim())
+            .putString("gemini_key", geminiKey.trim())
+            .apply()
+        _snackbarMessage.value = "Tetapan Kunci API dikemas kini!"
+    }
+
+    fun setPersona(persona: CoachPersona) {
+        liveVoiceManager.setPersona(persona)
+        _snackbarMessage.value = "Personaliti suara: ${persona.title}"
+    }
+
+    fun openLiveSession() {
+        _isLiveSessionOpen.value = true
+        _selectedAIEngine.value = AIEngineType.GEMINI_LIVE
+    }
+
+    fun closeLiveSession() {
+        _isLiveSessionOpen.value = false
+        liveVoiceManager.stopListening()
+        liveVoiceManager.stopSpeaking()
+    }
+
+    fun startListening() {
+        liveVoiceManager.startListening()
+    }
+
+    fun stopListening() {
+        liveVoiceManager.stopListening()
+    }
+
+    fun speakCoachMessage(text: String) {
+        liveVoiceManager.speak(text)
+    }
+
+    fun stopSpeaking() {
+        liveVoiceManager.stopSpeaking()
+    }
+
+    fun sendChatMessage(text: String, engineOverride: AIEngineType? = null) {
         val trimmed = text.trim()
         if (trimmed.isBlank() || _isGeneratingAI.value) return
 
+        val activeEngine = engineOverride ?: _selectedAIEngine.value
+
         viewModelScope.launch {
             _isGeneratingAI.value = true
-            repository.sendChatMessage(trimmed, sender = "user")
+            repository.sendChatMessage(trimmed, sender = "user", suggestionType = "user")
 
             val active = allHabits.value
             val profile = userProfile.value
@@ -365,11 +450,19 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                 userMessage = trimmed,
                 recentHistory = history,
                 activeHabits = active,
-                userGoal = profile?.primaryGoal ?: "Consistency"
+                userGoal = profile?.primaryGoal ?: "Consistency",
+                engine = activeEngine,
+                customGeminiKey = _customGeminiKey.value,
+                customOpenAiKey = _customOpenAiKey.value
             )
 
-            repository.sendChatMessage(reply, sender = "coach")
+            repository.sendChatMessage(reply, sender = "coach", suggestionType = activeEngine.id)
             _isGeneratingAI.value = false
+
+            // Automatically speak reply aloud if in Gemini Live mode or Live Session is active
+            if (activeEngine == AIEngineType.GEMINI_LIVE || _isLiveSessionOpen.value) {
+                liveVoiceManager.speak(reply)
+            }
         }
     }
 
@@ -546,5 +639,10 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         AppIntegrationHelper.toggleOverlayService(getApplication(), enable)
         _isOverlayActive.value = enable
         _snackbarMessage.value = if (enable) "Floating Overlay diaktifkan!" else "Floating Overlay ditutup"
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        liveVoiceManager.cleanup()
     }
 }
