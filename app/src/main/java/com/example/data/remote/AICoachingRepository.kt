@@ -26,7 +26,7 @@ class AICoachingRepository(
         userGoal: String
     ): String = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
-        if (apiKey.isNullOrBlank() || apiKey == "MY_GEMINI_API_KEY") {
+        if (apiKey.isNullOrBlank() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "your_api_key_here") {
             return@withContext generateOfflineFallbackReply(userMessage, activeHabits, userGoal)
         }
 
@@ -86,7 +86,7 @@ class AICoachingRepository(
             3. **Habit Stacking Recommendation**: How to anchor these habits together in an unbroken chain (e.g. After X, I will do Y).
         """.trimIndent()
 
-        if (apiKey.isNullOrBlank() || apiKey == "MY_GEMINI_API_KEY") {
+        if (apiKey.isNullOrBlank() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "your_api_key_here") {
             return@withContext generateOfflineAnalysis(activeHabits, totalCompletions, userName)
         }
 
@@ -116,7 +116,7 @@ class AICoachingRepository(
             - How to level it up once consistent
         """.trimIndent()
 
-        if (apiKey.isNullOrBlank() || apiKey == "MY_GEMINI_API_KEY") {
+        if (apiKey.isNullOrBlank() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "your_api_key_here") {
             return@withContext generateOfflineGoalBreakdown(goal)
         }
 
